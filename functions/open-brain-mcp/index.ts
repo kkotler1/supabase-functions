@@ -450,6 +450,30 @@ server.registerTool(
 
 const app = new Hono();
 
+// Health check — no auth required, registered before auth middleware
+app.get("/health", async (c) => {
+  let dbStatus: "connected" | "unreachable" = "unreachable";
+  let httpStatus: 200 | 503 = 503;
+
+  try {
+    const { error } = await supabase
+      .from("thoughts")
+      .select("id", { count: "exact", head: true })
+      .limit(1);
+    if (!error) {
+      dbStatus = "connected";
+      httpStatus = 200;
+    }
+  } catch {
+    // db unreachable — keep defaults
+  }
+
+  return c.json(
+    { status: "ok", server: "open-brain", timestamp: new Date().toISOString(), db: dbStatus },
+    httpStatus
+  );
+});
+
 app.all("*", async (c) => {
   // Accept access key via header OR URL query parameter
   const provided = c.req.header("x-brain-key") || new URL(c.req.url).searchParams.get("key");
