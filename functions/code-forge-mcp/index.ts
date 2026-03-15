@@ -652,12 +652,12 @@ app.options("*", (c) => {
 });
 
 // Health check
-app.get("/", (c) => {
+app.get("*", (c) => {
   return c.json({ status: "ok", server: "code-forge-mcp", version: "1.0.0" });
 });
 
 // MCP endpoint
-app.post("/", async (c) => {
+app.post("*", async (c) => {
   const query = new URL(c.req.url).searchParams;
 
   if (!authenticate(c.req.raw, query)) {
