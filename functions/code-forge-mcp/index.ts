@@ -8,7 +8,7 @@ const app = new Hono();
 // =============================================================================
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const FORGE_KEY = Deno.env.get("FORGE_KEY");
+const FORGE_KEY = Deno.env.get("FORGE_KEY"); // Auth key for this MCP server
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -16,7 +16,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 // Auth
 // =============================================================================
 function authenticate(req: Request, query: URLSearchParams): boolean {
-  if (!FORGE_KEY) return true;
+  if (!FORGE_KEY) return true; // No key configured = open (dev mode)
   const headerKey = req.headers.get("x-forge-key");
   const queryKey = query.get("key");
   return headerKey === FORGE_KEY || queryKey === FORGE_KEY;
@@ -41,7 +41,7 @@ const TOOLS = [
         },
         target_repo: {
           type: "string",
-          description: "GitHub repo identifier as registered in forge_projects (e.g., 'kylekotler/open-brain')",
+          description: "GitHub repo identifier as registered in forge_projects (e.g., 'kkotler1/open-brain')",
         },
         target_branch: {
           type: "string",
@@ -137,7 +137,7 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        repo: { type: "string", description: "GitHub repo identifier (e.g., 'kylekotler/blaze-vending-site')" },
+        repo: { type: "string", description: "GitHub repo identifier (e.g., 'kkotler1/blaze-vending-site')" },
         description: { type: "string", description: "What this project is and does" },
         tech_stack: { type: "string", description: "Languages, frameworks, key dependencies" },
         conventions: { type: "string", description: "Coding standards, file structure patterns, naming conventions" },
@@ -155,6 +155,83 @@ const TOOLS = [
         repo: { type: "string", description: "GitHub repo identifier" },
       },
       required: ["repo"],
+    },
+  },
+  {
+    name: "forge_log_error",
+    description:
+      "Log an error that occurred during task execution. Records which phase failed, the error message, and optional context/stack trace. Use this to build an incident history that can be reviewed and promoted to corrections.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "string",
+          description: "UUID of the task that encountered the error (optional for system-level errors)",
+        },
+        phase: {
+          type: "string",
+          description: "Which pipeline step failed: planning, coding, testing, self_eval, pr_creation, deployment, other",
+        },
+        error_message: {
+          type: "string",
+          description: "Clear description of what went wrong",
+        },
+        context: {
+          type: "string",
+          description: "What the agent was trying to do when the error occurred (optional)",
+        },
+        stack_trace: {
+          type: "string",
+          description: "Raw error output for debugging (optional)",
+        },
+      },
+      required: ["phase", "error_message"],
+    },
+  },
+  {
+    name: "forge_list_errors",
+    description:
+      "View logged errors. Filterable by task, phase, or resolution status. Use during reviews to identify patterns worth promoting to corrections.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "string",
+          description: "Filter errors for a specific task (optional)",
+        },
+        phase: {
+          type: "string",
+          description: "Filter by phase: planning, coding, testing, self_eval, pr_creation, deployment, other (optional)",
+        },
+        resolved: {
+          type: "boolean",
+          description: "Filter by resolution status. false = unresolved only, true = resolved only. Omit for all.",
+        },
+        limit: {
+          type: "number",
+          description: "Max results to return (default: 20, max: 100)",
+          default: 20,
+        },
+      },
+    },
+  },
+  {
+    name: "forge_resolve_error",
+    description:
+      "Mark an error as resolved. Optionally link it to a correction rule that was extracted from this error. This closes the loop: error → review → correction → smarter agent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        error_id: {
+          type: "string",
+          description: "UUID of the error to resolve",
+        },
+        correction_id: {
+          type: "string",
+          description: "UUID of the correction rule extracted from this error (optional — omit if no correction was needed)",
+        },
+      },
+      required: ["error_id"],
     },
   },
 ];
@@ -178,11 +255,20 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return await registerProject(args);
     case "forge_get_project_context":
       return await getProjectContext(args);
+    case "forge_log_error":
+      return await logError(args);
+    case "forge_list_errors":
+      return await listErrors(args);
+    case "forge_resolve_error":
+      return await resolveError(args);
     default:
       return JSON.stringify({ error: `Unknown tool: ${name}` });
   }
 }
 
+// -----------------------------------------------------------------------------
+// submit_task
+// -----------------------------------------------------------------------------
 async function submitTask(args: Record<string, unknown>): Promise<string> {
   const { title, description, target_repo, target_branch } = args as {
     title: string;
@@ -219,6 +305,8 @@ async function submitTask(args: Record<string, unknown>): Promise<string> {
     return JSON.stringify({ error: `Failed to create task: ${taskErr.message}` });
   }
 
+  // TODO Phase 2: Trigger GitHub Actions workflow_dispatch here
+
   return JSON.stringify({
     success: true,
     task_id: task.id,
@@ -227,6 +315,9 @@ async function submitTask(args: Record<string, unknown>): Promise<string> {
   });
 }
 
+// -----------------------------------------------------------------------------
+// get_task_status
+// -----------------------------------------------------------------------------
 async function getTaskStatus(args: Record<string, unknown>): Promise<string> {
   const { task_id } = args as { task_id: string };
 
@@ -243,6 +334,9 @@ async function getTaskStatus(args: Record<string, unknown>): Promise<string> {
   return JSON.stringify(data);
 }
 
+// -----------------------------------------------------------------------------
+// list_tasks
+// -----------------------------------------------------------------------------
 async function listTasks(args: Record<string, unknown>): Promise<string> {
   const status = args.status as string | undefined;
   const limit = Math.min((args.limit as number) || 10, 50);
@@ -266,6 +360,9 @@ async function listTasks(args: Record<string, unknown>): Promise<string> {
   return JSON.stringify({ count: data?.length || 0, tasks: data || [] });
 }
 
+// -----------------------------------------------------------------------------
+// add_correction
+// -----------------------------------------------------------------------------
 async function addCorrection(args: Record<string, unknown>): Promise<string> {
   const { rule, category, task_id, source } = args as {
     rule: string;
@@ -300,6 +397,9 @@ async function addCorrection(args: Record<string, unknown>): Promise<string> {
   });
 }
 
+// -----------------------------------------------------------------------------
+// list_corrections
+// -----------------------------------------------------------------------------
 async function listCorrections(args: Record<string, unknown>): Promise<string> {
   const category = args.category as string | undefined;
   const limit = Math.min((args.limit as number) || 50, 200);
@@ -323,6 +423,9 @@ async function listCorrections(args: Record<string, unknown>): Promise<string> {
   return JSON.stringify({ count: data?.length || 0, corrections: data || [] });
 }
 
+// -----------------------------------------------------------------------------
+// register_project
+// -----------------------------------------------------------------------------
 async function registerProject(args: Record<string, unknown>): Promise<string> {
   const { repo, description, tech_stack, conventions } = args as {
     repo: string;
@@ -357,6 +460,9 @@ async function registerProject(args: Record<string, unknown>): Promise<string> {
   });
 }
 
+// -----------------------------------------------------------------------------
+// get_project_context
+// -----------------------------------------------------------------------------
 async function getProjectContext(args: Record<string, unknown>): Promise<string> {
   const { repo } = args as { repo: string };
 
@@ -389,6 +495,114 @@ async function getProjectContext(args: Record<string, unknown>): Promise<string>
     corrections: corrections || [],
     corrections_count: corrections?.length || 0,
     message: "This context is injected into the agent prompt before every task execution.",
+  });
+}
+
+// -----------------------------------------------------------------------------
+// log_error
+// -----------------------------------------------------------------------------
+async function logError(args: Record<string, unknown>): Promise<string> {
+  const { task_id, phase, error_message, context, stack_trace } = args as {
+    task_id?: string;
+    phase: string;
+    error_message: string;
+    context?: string;
+    stack_trace?: string;
+  };
+
+  const validPhases = ["planning", "coding", "testing", "self_eval", "pr_creation", "deployment", "other"];
+  if (!validPhases.includes(phase)) {
+    return JSON.stringify({
+      error: `Invalid phase '${phase}'. Must be one of: ${validPhases.join(", ")}`,
+    });
+  }
+
+  const insert: Record<string, unknown> = {
+    phase,
+    error_message,
+  };
+  if (task_id) insert.task_id = task_id;
+  if (context) insert.context = context;
+  if (stack_trace) insert.stack_trace = stack_trace;
+
+  const { data, error } = await supabase
+    .from("forge_errors")
+    .insert(insert)
+    .select()
+    .single();
+
+  if (error) {
+    return JSON.stringify({ error: `Failed to log error: ${error.message}` });
+  }
+
+  return JSON.stringify({
+    success: true,
+    error_id: data.id,
+    phase: data.phase,
+    message: "Error logged. Review during next task review and promote to correction if pattern detected.",
+  });
+}
+
+// -----------------------------------------------------------------------------
+// list_errors
+// -----------------------------------------------------------------------------
+async function listErrors(args: Record<string, unknown>): Promise<string> {
+  const task_id = args.task_id as string | undefined;
+  const phase = args.phase as string | undefined;
+  const resolved = args.resolved as boolean | undefined;
+  const limit = Math.min((args.limit as number) || 20, 100);
+
+  let query = supabase
+    .from("forge_errors")
+    .select("id, task_id, phase, error_message, context, resolved, correction_id, created_at")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (task_id) query = query.eq("task_id", task_id);
+  if (phase) query = query.eq("phase", phase);
+  if (resolved !== undefined) query = query.eq("resolved", resolved);
+
+  const { data, error } = await query;
+
+  if (error) {
+    return JSON.stringify({ error: `Failed to list errors: ${error.message}` });
+  }
+
+  return JSON.stringify({ count: data?.length || 0, errors: data || [] });
+}
+
+// -----------------------------------------------------------------------------
+// resolve_error
+// -----------------------------------------------------------------------------
+async function resolveError(args: Record<string, unknown>): Promise<string> {
+  const { error_id, correction_id } = args as {
+    error_id: string;
+    correction_id?: string;
+  };
+
+  const update: Record<string, unknown> = { resolved: true };
+  if (correction_id) update.correction_id = correction_id;
+
+  const { data, error } = await supabase
+    .from("forge_errors")
+    .update(update)
+    .eq("id", error_id)
+    .select("id, phase, error_message, resolved, correction_id")
+    .single();
+
+  if (error) {
+    return JSON.stringify({ error: `Failed to resolve error: ${error.message}` });
+  }
+
+  if (!data) {
+    return JSON.stringify({ error: `Error '${error_id}' not found.` });
+  }
+
+  const linked = correction_id ? ` Linked to correction ${correction_id}.` : "";
+  return JSON.stringify({
+    success: true,
+    error_id: data.id,
+    message: `Error resolved.${linked} The loop is closed.`,
   });
 }
 
@@ -425,6 +639,7 @@ function handleMCPRequest(method: string, params?: Record<string, unknown>) {
 // Routes
 // =============================================================================
 
+// CORS preflight
 app.options("*", (c) => {
   return new Response(null, {
     status: 204,
@@ -436,10 +651,12 @@ app.options("*", (c) => {
   });
 });
 
+// Health check
 app.get("/", (c) => {
   return c.json({ status: "ok", server: "code-forge-mcp", version: "1.0.0" });
 });
 
+// MCP endpoint
 app.post("/", async (c) => {
   const query = new URL(c.req.url).searchParams;
 
