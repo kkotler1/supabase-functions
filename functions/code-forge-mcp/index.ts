@@ -276,7 +276,7 @@ server.registerTool(
   {
     title: "List Corrections",
     description:
-      "View all correction rules in the knowledge base. Filterable by category. These rules are injected into the agent's context on every task run.",
+      "View correction rules in the knowledge base. Filterable by category and status. Only active corrections are injected into the agent's context on every task run.",
     inputSchema: {
       category: z
         .string()
@@ -284,6 +284,11 @@ server.registerTool(
         .describe(
           "Filter by category: code_style, architecture, testing, api_usage, business_logic, general. Omit for all."
         ),
+      status: z
+        .string()
+        .optional()
+        .default("active")
+        .describe("Filter by status: active, draft, archived (default: active)"),
       limit: z
         .number()
         .optional()
@@ -291,12 +296,14 @@ server.registerTool(
         .describe("Max results to return (default: 50, max: 200)"),
     },
   },
-  async ({ category, limit }) => {
+  async ({ category, status, limit }) => {
     const cap = Math.min(limit ?? 50, 200);
+    const statusFilter = status ?? "active";
 
     let query = supabase
       .from("forge_corrections")
-      .select("id, rule, category, source, task_id, created_at")
+      .select("id, rule, category, source, task_id, status, created_at")
+      .eq("status", statusFilter)
       .order("created_at", { ascending: false })
       .limit(cap);
 
@@ -412,6 +419,7 @@ server.registerTool(
     const { data: corrections, error: corrErr } = await supabase
       .from("forge_corrections")
       .select("rule, category, source")
+      .eq("status", "active")
       .order("created_at", { ascending: true });
 
     if (corrErr) {
@@ -642,6 +650,256 @@ server.registerTool(
             success: true,
             error_id: data.id,
             message: `Error resolved.${linked} The loop is closed.`,
+          }),
+        },
+      ],
+    };
+  }
+);
+
+// =============================================================================
+// Tool: forge_review_drafts
+// =============================================================================
+server.registerTool(
+  "forge_review_drafts",
+  {
+    title: "Review Draft Corrections",
+    description:
+      "List all correction rules with status=draft awaiting review. Includes rule text, category, source, created_at, and the task_id that generated it (if any). Use forge_approve_correction to activate or reject each draft.",
+    inputSchema: {
+      limit: z
+        .number()
+        .optional()
+        .default(20)
+        .describe("Max results to return (default: 20, max: 100)"),
+    },
+  },
+  async ({ limit }) => {
+    const cap = Math.min(limit ?? 20, 100);
+
+    const { data, error } = await supabase
+      .from("forge_corrections")
+      .select("id, rule, category, source, task_id, status, created_at")
+      .eq("status", "draft")
+      .order("created_at", { ascending: false })
+      .limit(cap);
+
+    if (error) {
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify({ error: `Failed to list draft corrections: ${error.message}` }) },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify({ count: data?.length || 0, drafts: data || [] }) },
+      ],
+    };
+  }
+);
+
+// =============================================================================
+// Tool: forge_approve_correction
+// =============================================================================
+server.registerTool(
+  "forge_approve_correction",
+  {
+    title: "Approve or Reject Draft Correction",
+    description:
+      "Transition a draft correction to active or archived. action='activate' promotes it into the agent's live context; action='reject' archives it. Only corrections currently in draft status can be actioned.",
+    inputSchema: {
+      id: z.string().describe("UUID of the draft correction to action"),
+      action: z
+        .enum(["activate", "reject"])
+        .describe("'activate' sets status=active; 'reject' sets status=archived"),
+    },
+  },
+  async ({ id, action }) => {
+    // Fetch the correction and verify it exists and is in draft status
+    const { data: existing, error: fetchErr } = await supabase
+      .from("forge_corrections")
+      .select("id, rule, category, source, task_id, status, created_at")
+      .eq("id", id)
+      .single();
+
+    if (fetchErr || !existing) {
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify({ error: `Correction '${id}' not found.` }) },
+        ],
+        isError: true,
+      };
+    }
+
+    if (existing.status !== "draft") {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              error: `Correction '${id}' is not in draft status (current status: '${existing.status}'). Only draft corrections can be activated or rejected.`,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const newStatus = action === "activate" ? "active" : "archived";
+
+    const { data: updated, error: updateErr } = await supabase
+      .from("forge_corrections")
+      .update({ status: newStatus })
+      .eq("id", id)
+      .select("id, rule, category, source, task_id, status, created_at")
+      .single();
+
+    if (updateErr) {
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify({ error: `Failed to update correction: ${updateErr.message}` }) },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            success: true,
+            correction: updated,
+            message:
+              action === "activate"
+                ? "Correction activated. It will now be injected into all future agent task contexts."
+                : "Correction rejected and archived. It will not be injected into agent context.",
+          }),
+        },
+      ],
+    };
+  }
+);
+
+// =============================================================================
+// Tool: forge_auto_promote
+// =============================================================================
+server.registerTool(
+  "forge_auto_promote",
+  {
+    title: "Auto-Promote Error Patterns to Draft Corrections",
+    description:
+      "Scans unresolved errors in forge_errors for recurring patterns (same error_message appearing 2+ times across different task_ids). Creates a draft correction for each new pattern found. Skips patterns already covered by an active or draft correction.",
+    inputSchema: {},
+  },
+  async () => {
+    // Fetch all unresolved errors that have a task_id
+    const { data: errors, error: fetchErr } = await supabase
+      .from("forge_errors")
+      .select("id, task_id, error_message")
+      .eq("resolved", false)
+      .not("task_id", "is", null);
+
+    if (fetchErr) {
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify({ error: `Failed to fetch errors: ${fetchErr.message}` }) },
+        ],
+        isError: true,
+      };
+    }
+
+    // Group by error_message and collect distinct task_ids
+    const patterns = new Map<string, Set<string>>();
+    for (const err of errors ?? []) {
+      if (!err.task_id) continue;
+      if (!patterns.has(err.error_message)) {
+        patterns.set(err.error_message, new Set());
+      }
+      patterns.get(err.error_message)!.add(err.task_id);
+    }
+
+    // Retain only patterns appearing across 2+ distinct task_ids
+    const recurringPatterns: string[] = [];
+    for (const [errorMessage, taskIds] of patterns.entries()) {
+      if (taskIds.size >= 2) {
+        recurringPatterns.push(errorMessage);
+      }
+    }
+
+    if (recurringPatterns.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              success: true,
+              new_drafts: 0,
+              message: "No recurring error patterns detected across multiple tasks.",
+            }),
+          },
+        ],
+      };
+    }
+
+    // Fetch all existing active/draft corrections to check for duplicates
+    const { data: existingCorrections, error: corrFetchErr } = await supabase
+      .from("forge_corrections")
+      .select("id, rule")
+      .in("status", ["active", "draft"]);
+
+    if (corrFetchErr) {
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify({ error: `Failed to fetch existing corrections: ${corrFetchErr.message}` }) },
+        ],
+        isError: true,
+      };
+    }
+
+    let newDrafts = 0;
+    const createdPatterns: string[] = [];
+
+    for (const errorMessage of recurringPatterns) {
+      // Check if an existing active/draft correction already covers this error pattern
+      // (exact substring match: error_message appears in any existing rule)
+      const alreadyCovered = (existingCorrections ?? []).some(
+        (c) => c.rule.includes(errorMessage) || errorMessage.includes(c.rule)
+      );
+
+      if (alreadyCovered) continue;
+
+      const rule = `Recurring error pattern detected across multiple tasks: "${errorMessage}". This error has been observed in 2 or more distinct task executions. Investigate the root cause and add a specific correction to prevent recurrence.`;
+
+      const { error: insertErr } = await supabase.from("forge_corrections").insert({
+        rule,
+        category: "general",
+        source: "auto",
+        status: "draft",
+      });
+
+      if (!insertErr) {
+        newDrafts++;
+        createdPatterns.push(errorMessage);
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            success: true,
+            new_drafts: newDrafts,
+            patterns_scanned: recurringPatterns.length,
+            patterns_promoted: createdPatterns,
+            message:
+              newDrafts > 0
+                ? `${newDrafts} draft correction(s) created. Use forge_review_drafts to inspect and forge_approve_correction to activate or reject each one.`
+                : "All recurring patterns are already covered by existing corrections. No new drafts created.",
           }),
         },
       ],
