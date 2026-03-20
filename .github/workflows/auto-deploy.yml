@@ -1,0 +1,48 @@
+name: Auto Deploy Edge Functions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Supabase CLI
+        run: npm install -g supabase
+
+      - name: Detect changed functions and deploy
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          CHANGED=$(git diff --name-only HEAD~1 HEAD -- functions/)
+          if [ -z "$CHANGED" ]; then
+            echo "No function files changed. Skipping deployment."
+            exit 0
+          fi
+          FUNCTIONS=$(echo "$CHANGED" | cut -d'/' -f2 | sort -u)
+          echo "Functions to deploy:"
+          echo "$FUNCTIONS"
+          for FUNC in $FUNCTIONS; do
+            if [ -d "functions/$FUNC" ]; then
+              echo "Deploying $FUNC..."
+              supabase functions deploy "$FUNC" --no-verify-jwt --project-ref "$SUPABASE_PROJECT_REF"
+              echo "Deployed $FUNC successfully."
+            else
+              echo "Skipping $FUNC - directory not found."
+            fi
+          done
