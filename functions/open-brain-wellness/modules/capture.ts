@@ -6,6 +6,7 @@
 import type { CaptureOptions, CaptureResult, InsertedCounts } from "../types.ts";
 import { insertRawEntry, updateRawEntryParsed, insertDomainEntries } from "./db.ts";
 import { parseFreeformInput } from "./llm-parser.ts";
+import { resolveMealItems } from "./food-resolver.ts";
 
 export async function captureWellnessEntry(
   content: string,
@@ -51,16 +52,25 @@ export async function captureWellnessEntry(
     parsed
   );
 
-  // 6. Food resolution (Phase 2 — stubbed for now)
-  // TODO: resolve foods from meal items
-  const food_resolutions: CaptureResult["food_resolutions"] = [];
+  // 6. Food resolution — resolve all new meal items
+  let food_resolutions: CaptureResult["food_resolutions"] = [];
 
-  if (counts.meal_items > 0) {
-    warnings.push(`${counts.meal_items} food item(s) pending nutrition resolution.`);
+  if (mealItemIds.length > 0) {
+    try {
+      food_resolutions = await resolveMealItems(mealItemIds);
+
+      const estimated = food_resolutions.filter((r) => r.confidence < 0.5).length;
+      if (estimated > 0) {
+        warnings.push(`${estimated} food(s) resolved with low confidence — consider verifying.`);
+      }
+    } catch (err) {
+      console.error("Food resolution failed:", err);
+      warnings.push("Food resolution encountered an error. Items saved as pending.");
+    }
   }
 
-  // 7. Build summary
-  const summary = buildSummary(parsed, counts);
+  // 7. Build summary (now with calorie info if available)
+  const summary = buildSummary(parsed, counts, food_resolutions);
 
   return {
     raw_entry_id: rawEntry.id,
@@ -81,15 +91,25 @@ function emptyCounts(): InsertedCounts {
 
 function buildSummary(
   parsed: CaptureResult["parsed"],
-  counts: InsertedCounts
+  counts: InsertedCounts,
+  foodResolutions: CaptureResult["food_resolutions"]
 ): string {
   const parts: string[] = [];
 
-  // Meals
+  // Meals (now with calorie totals when available)
   if (counts.meals > 0) {
     const types = parsed.meals.map((m) => m.meal_type);
     const itemCount = parsed.meals.reduce((sum, m) => sum + m.items.length, 0);
-    parts.push(`${counts.meals} meal(s) (${types.join(", ")}) with ${itemCount} item(s)`);
+
+    let mealStr = `${counts.meals} meal(s) (${types.join(", ")}) with ${itemCount} item(s)`;
+
+    // Add calorie estimate from resolutions
+    const totalCal = foodResolutions.reduce((sum, r) => sum + (r.food.calories || 0), 0);
+    if (totalCal > 0) {
+      mealStr += ` ~${Math.round(totalCal)} cal`;
+    }
+
+    parts.push(mealStr);
   }
 
   // Sleep

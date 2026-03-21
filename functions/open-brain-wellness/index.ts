@@ -15,6 +15,7 @@ import { z } from "zod";
 import { LOG_WELLNESS_TOOL, handleLogWellness } from "./tools/log-wellness.ts";
 import { WELLNESS_STATUS_TOOL, handleWellnessStatus } from "./tools/wellness-status.ts";
 import { WELLNESS_QUERY_TOOL, handleWellnessQuery } from "./tools/wellness-query.ts";
+import { RESOLVE_FOOD_TOOL, handleResolveFood } from "./tools/resolve-food.ts";
 import { verifySlackSignature, processWellnessSlackMessage } from "./slack/handler.ts";
 
 const app = new Hono();
@@ -79,6 +80,20 @@ function createMcpServer(): McpServer {
       },
     },
     async (args) => handleWellnessQuery(args)
+  );
+
+  server.registerTool(
+    RESOLVE_FOOD_TOOL.name,
+    {
+      title: "Resolve Food",
+      description: RESOLVE_FOOD_TOOL.description,
+      inputSchema: {
+        food_name: z.string().describe("Food to look up, correct, or re-resolve."),
+        action: z.enum(["lookup", "correct", "re_resolve", "list_catalog", "list_unverified"]).optional().describe("Action to perform. Default: lookup."),
+        corrections: z.record(z.unknown()).optional().describe("For 'correct' action — fields to override (calories, protein_g, carbs_g, fat_g, etc.)."),
+      },
+    },
+    async (args) => handleResolveFood(args)
   );
 
   return server;
