@@ -121,15 +121,11 @@ function buildSummary(
     parts.push(`sleep (${sleepParts.join(", ")})`);
   }
 
-  // Supplements (taken and skipped)
-  if (counts.supplements > 0) {
-    const taken = parsed.supplements.filter((s) => !s.skipped).map((s) => s.name);
-    parts.push(taken.join(", "));
-  }
-  if (counts.supplements_skipped > 0) {
-    const skipped = parsed.supplements.filter((s) => s.skipped).map((s) => s.name);
-    parts.push(`skipped: ${skipped.join(", ")}`);
-  }
+  // Supplements (taken and skipped) — use parsed, not counts, so DB failures don't silence the summary
+  const takenSupps = parsed.supplements.filter((s) => !s.skipped).map((s) => s.name);
+  const skippedSupps = parsed.supplements.filter((s) => s.skipped).map((s) => s.name);
+  if (takenSupps.length > 0) parts.push(takenSupps.join(", "));
+  if (skippedSupps.length > 0) parts.push(`skipped: ${skippedSupps.join(", ")}`);
 
   // Symptoms
   if (counts.symptoms > 0) {
@@ -159,8 +155,8 @@ function buildSummary(
     parts.push(workoutStrs.join(", "));
   }
 
-  // Bathroom
-  if (counts.bathroom > 0) {
+  // Bathroom — use parsed, not counts, so DB failures don't silence the summary
+  if (parsed.bathroom.length > 0) {
     const bathroomStrs = parsed.bathroom.map((b) => {
       let s = `${b.entry_type} ×${b.count}`;
       if (b.time_of_day) s += ` (${b.time_of_day})`;
