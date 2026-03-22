@@ -33,7 +33,7 @@ function checkAuth(req: Request): boolean {
   return queryKey === key || headerKey === key;
 }
 
-// --- MCP Server Setup ---
+// --- MCP Server Setup (singleton, matches open-brain-mcp pattern) ---
 
 function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -73,7 +73,7 @@ function createMcpServer(): McpServer {
       title: "Wellness Query",
       description: WELLNESS_QUERY_TOOL.description,
       inputSchema: {
-        category: z.enum(["meals", "sleep", "supplements", "symptoms", "habits", "hydration", "workouts", "all"]).describe("Which data category to query. Use 'all' for a complete day summary."),
+        category: z.enum(["meals", "sleep", "supplements", "symptoms", "habits", "hydration", "workouts", "bathroom", "all"]).describe("Which data category to query. Use 'all' for a complete day summary."),
         days_back: z.number().optional().describe("How many days to look back. Default 7."),
         date: z.string().optional().describe("Specific date (YYYY-MM-DD) to query. Overrides days_back."),
         metric: z.string().optional().describe("For symptoms: filter by specific metric (energy, focus, mood, etc.)"),
@@ -90,7 +90,7 @@ function createMcpServer(): McpServer {
       inputSchema: {
         food_name: z.string().describe("Food to look up, correct, or re-resolve."),
         action: z.enum(["lookup", "correct", "re_resolve", "list_catalog", "list_unverified"]).optional().describe("Action to perform. Default: lookup."),
-        corrections: z.record(z.unknown()).optional().describe("For 'correct' action — fields to override (calories, protein_g, carbs_g, fat_g, etc.)."),
+        corrections: z.record(z.string(), z.unknown()).optional().describe("For 'correct' action — fields to override (calories, protein_g, carbs_g, fat_g, etc.)."),
       },
     },
     async (args) => handleResolveFood(args)
@@ -98,6 +98,11 @@ function createMcpServer(): McpServer {
 
   return server;
 }
+
+// Singleton — created once at module load, same pattern as open-brain-mcp.
+// Per-request server creation causes the MCP SDK to re-register handlers on
+// every connect() call, which breaks the transport's initialization state.
+const mcpServer = createMcpServer();
 
 // --- All Routes (wildcard — Supabase passes full URL path so specific routes don't match) ---
 
@@ -147,9 +152,14 @@ app.all("*", async (c) => {
     const channel = event.channel;
     const ts = event.ts;
 
-    processWellnessSlackMessage(text, channel, ts).catch((err) => {
+    // Use waitUntil so the function stays alive for the full pipeline
+    // (domain inserts + food resolution) even after responding to Slack.
+    // Without this, the edge function tears down after the response and
+    // kills any in-flight async work.
+    const processingPromise = processWellnessSlackMessage(text, channel, ts).catch((err) => {
       console.error("Async Slack processing error:", err);
     });
+    EdgeRuntime.waitUntil(processingPromise);
 
     return c.json({ ok: true });
   }
@@ -159,9 +169,8 @@ app.all("*", async (c) => {
     return c.json({ error: "unauthorized" }, 401);
   }
 
-  const server = createMcpServer();
   const transport = new StreamableHTTPTransport();
-  await server.connect(transport);
+  await mcpServer.connect(transport);
   return transport.handleRequest(c);
 });
 

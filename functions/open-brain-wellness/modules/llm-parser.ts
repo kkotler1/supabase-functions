@@ -26,7 +26,17 @@ FOOD RULES (critical):
 - Fractional quantities: "one third" = 0.33, "half" = 0.5, "a handful" = 1 serving, "a spoonful" = 1 tbsp
 - "From the day before" or "leftover" does NOT change the food, just apply the quantity
 - Include brand names: "Nature's Promise Organic No-Stir Crunchy Peanut Butter" — keep full product name
-- Include size when stated: "single serving 150g" → quantity: 150, unit: "g"
+- QUANTITY RULES (critical — get this right):
+  - quantity means NUMBER OF SERVINGS, not weight in grams
+  - "single serving 150g" → quantity: 1, unit: "serving" (the 150g describes serving size, not quantity)
+  - "Chobani yogurt 150g" → quantity: 1, unit: "serving"
+  - "Oikos 30g protein drink" → quantity: 1, unit: "serving" (30g describes protein content, not quantity)
+  - "two yogurts" → quantity: 2, unit: "serving"
+  - "one third of a chipotle bowl" → quantity: 0.33, unit: "serving"
+  - "half a sandwich" → quantity: 0.5, unit: "serving"
+  - "a handful of blueberries" → quantity: 1, unit: "serving"
+  - "a spoonful of peanut butter" → quantity: 1, unit: "tbsp"
+  - NEVER set quantity to a gram weight (like 150 or 30) — those numbers describe the product, not how many you ate
 
 SUPPLEMENT RULES:
 - If the person says they DID take a supplement: skipped = false

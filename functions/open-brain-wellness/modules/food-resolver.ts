@@ -74,7 +74,7 @@ export async function resolveMealItems(
       // Get the meal item
       const { data: item, error } = await db
         .from("wellness_meal_items")
-        .select("id, input_name, input_quantity")
+        .select("id, input_name, input_quantity, input_unit")
         .eq("id", itemId)
         .single();
 
@@ -83,8 +83,28 @@ export async function resolveMealItems(
       // Resolve the food
       const resolution = await resolveFood(item.input_name);
 
-      // Update the meal item with resolved nutrition
-      const multiplier = item.input_quantity || 1;
+      // Calculate multiplier — unit-aware
+      // If unit is grams/ml and the food has a serving size in grams,
+      // compute the ratio. Otherwise, treat quantity as number of servings.
+      let multiplier = item.input_quantity || 1;
+      const unit = (item.input_unit || "serving").toLowerCase();
+
+      if ((unit === "g" || unit === "ml") && resolution.food.serving_size) {
+        // User specified weight, catalog has serving size — compute ratio
+        multiplier = multiplier / resolution.food.serving_size;
+      } else if (unit === "g" || unit === "ml") {
+        // User specified weight but no serving size in catalog — assume 100g reference
+        // This is a rough fallback; better than multiplying by raw grams
+        multiplier = multiplier / 100;
+      }
+
+      // Safety clamp: no single food item should exceed ~3000 calories
+      // If multiplier would create absurd values, cap at 1
+      if (resolution.food.calories != null && resolution.food.calories * multiplier > 3000) {
+        console.warn(`Clamping multiplier for ${item.input_name}: ${multiplier} would give ${resolution.food.calories * multiplier} cal`);
+        multiplier = 1;
+      }
+
       const updateData: Record<string, unknown> = {
         food_catalog_id: resolution.food.id,
         resolution_status: resolution.confidence >= 0.5 ? "resolved" : "estimated",

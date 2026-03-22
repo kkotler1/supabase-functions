@@ -21,7 +21,7 @@ Examples:
     properties: {
       category: {
         type: "string",
-        enum: ["meals", "sleep", "supplements", "symptoms", "habits", "hydration", "workouts", "all"],
+        enum: ["meals", "sleep", "supplements", "symptoms", "habits", "hydration", "workouts", "bathroom", "all"],
         description: "Which data category to query. Use 'all' for a complete day summary.",
       },
       days_back: {
@@ -70,7 +70,7 @@ export async function handleWellnessQuery(args: {
   };
 
   const categories = args.category === "all"
-    ? ["meals", "sleep", "supplements", "symptoms", "habits", "hydration", "workouts"]
+    ? ["meals", "sleep", "supplements", "symptoms", "habits", "hydration", "workouts", "bathroom"]
     : [args.category];
 
   for (const cat of categories) {
@@ -187,6 +187,17 @@ export async function handleWellnessQuery(args: {
           .lte("entry_date", endDate)
           .order("entry_date", { ascending: false });
         result.workouts = data || [];
+        break;
+      }
+
+      case "bathroom": {
+        const { data } = await db
+          .from("wellness_bathroom_entries")
+          .select("entry_date, entry_type, count, time_of_day, notes")
+          .gte("entry_date", startDate)
+          .lte("entry_date", endDate)
+          .order("entry_date", { ascending: false });
+        result.bathroom = data || [];
         break;
       }
     }
