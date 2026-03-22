@@ -92,33 +92,41 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const messageTs: string = event.ts;
     if (!messageText || messageText.trim() === "") return new Response("ok", { status: 200 });
 
-    const [embedding, metadata] = await Promise.all([
-      getEmbedding(messageText),
-      extractMetadata(messageText),
-    ]);
+    // Return 200 immediately so Slack doesn't retry. Use waitUntil so the
+    // runtime stays alive for the full embedding + metadata + insert pipeline.
+    const processingPromise = (async () => {
+      const [embedding, metadata] = await Promise.all([
+        getEmbedding(messageText),
+        extractMetadata(messageText),
+      ]);
 
-    const { error } = await supabase.from("thoughts").insert({
-      content: messageText,
-      embedding,
-      metadata: { ...metadata, source: "slack", slack_ts: messageTs },
+      const { error } = await supabase.from("thoughts").insert({
+        content: messageText,
+        embedding,
+        metadata: { ...metadata, source: "slack", slack_ts: messageTs },
+      });
+
+      if (error) {
+        console.error("Supabase insert error:", error);
+        await replyInSlack(channel, messageTs, `Failed to capture: ${error.message}`);
+        return;
+      }
+
+      const meta = metadata as Record<string, unknown>;
+      let confirmation = `Captured as *${meta.type || "thought"}*`;
+      if (Array.isArray(meta.topics) && meta.topics.length > 0)
+        confirmation += ` — ${meta.topics.join(", ")}`;
+      if (Array.isArray(meta.people) && meta.people.length > 0)
+        confirmation += `\nPeople: ${meta.people.join(", ")}`;
+      if (Array.isArray(meta.action_items) && meta.action_items.length > 0)
+        confirmation += `\nAction items: ${meta.action_items.join("; ")}`;
+
+      await replyInSlack(channel, messageTs, confirmation);
+    })().catch((err) => {
+      console.error("Async processing error:", err);
     });
 
-    if (error) {
-      console.error("Supabase insert error:", error);
-      await replyInSlack(channel, messageTs, `Failed to capture: ${error.message}`);
-      return new Response("error", { status: 500 });
-    }
-
-    const meta = metadata as Record<string, unknown>;
-    let confirmation = `Captured as *${meta.type || "thought"}*`;
-    if (Array.isArray(meta.topics) && meta.topics.length > 0)
-      confirmation += ` — ${meta.topics.join(", ")}`;
-    if (Array.isArray(meta.people) && meta.people.length > 0)
-      confirmation += `\nPeople: ${meta.people.join(", ")}`;
-    if (Array.isArray(meta.action_items) && meta.action_items.length > 0)
-      confirmation += `\nAction items: ${meta.action_items.join("; ")}`;
-
-    await replyInSlack(channel, messageTs, confirmation);
+    EdgeRuntime.waitUntil(processingPromise);
     return new Response("ok", { status: 200 });
   } catch (err) {
     console.error("Function error:", err);
