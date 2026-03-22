@@ -37,7 +37,25 @@ jobs:
           for FUNC in $FUNCTIONS; do
             if [ -d "functions/$FUNC" ]; then
               echo "Deploying $FUNC..."
-              supabase functions deploy "$FUNC" --no-verify-jwt --project-ref "$SUPABASE_PROJECT_REF"
+
+              # Read verify_jwt from config.toml (default: enabled)
+              JWT_FLAG=""
+              if grep -A5 "\[functions\.$FUNC\]" config.toml | grep -q "verify_jwt = false"; then
+                JWT_FLAG="--no-verify-jwt"
+              fi
+
+              # Use explicit paths since functions live in functions/ not supabase/functions/
+              IMPORT_MAP_FLAG=""
+              if [ -f "functions/$FUNC/deno.json" ]; then
+                IMPORT_MAP_FLAG="--import-map functions/$FUNC/deno.json"
+              fi
+
+              supabase functions deploy "$FUNC" \
+                $JWT_FLAG \
+                $IMPORT_MAP_FLAG \
+                --entrypoint-path "functions/$FUNC/index.ts" \
+                --project-ref "$SUPABASE_PROJECT_REF"
+
               echo "Deployed $FUNC successfully."
             else
               echo "Skipping $FUNC - directory not found."
