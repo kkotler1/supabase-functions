@@ -36,6 +36,14 @@ export interface ParsedSupplement {
   name: string;
   dose: string | null;
   time_approx: string | null; // HH:MM
+  skipped: boolean; // true = explicitly did NOT take this
+}
+
+export interface ParsedBathroom {
+  entry_type: "urination" | "bowel" | "other";
+  count: number;
+  time_of_day: "morning" | "afternoon" | "evening" | "night" | "overnight" | "all_day" | null;
+  notes: string | null;
 }
 
 export interface ParsedHabit {
@@ -65,6 +73,7 @@ export interface ParsedWellnessData {
   habits: ParsedHabit[];
   hydration: ParsedHydration | null;
   workouts: ParsedWorkout[];
+  bathroom: ParsedBathroom[];
 }
 
 // --- Food Resolution ---
@@ -113,10 +122,12 @@ export interface InsertedCounts {
   meal_items: number;
   sleep: number;
   supplements: number;
+  supplements_skipped: number;
   symptoms: number;
   habits: number;
   hydration: number;
   workouts: number;
+  bathroom: number;
 }
 
 export interface CaptureResult {

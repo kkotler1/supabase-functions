@@ -31,7 +31,8 @@ export async function captureWellnessEntry(
     parsed.supplements.length > 0 ||
     parsed.habits.length > 0 ||
     parsed.hydration !== null ||
-    parsed.workouts.length > 0;
+    parsed.workouts.length > 0 ||
+    parsed.bathroom.length > 0;
 
   if (!hasData) {
     warnings.push("No wellness data could be extracted from this input.");
@@ -84,8 +85,8 @@ export async function captureWellnessEntry(
 
 function emptyCounts(): InsertedCounts {
   return {
-    meals: 0, meal_items: 0, sleep: 0, supplements: 0,
-    symptoms: 0, habits: 0, hydration: 0, workouts: 0,
+    meals: 0, meal_items: 0, sleep: 0, supplements: 0, supplements_skipped: 0,
+    symptoms: 0, habits: 0, hydration: 0, workouts: 0, bathroom: 0,
   };
 }
 
@@ -120,10 +121,14 @@ function buildSummary(
     parts.push(`sleep (${sleepParts.join(", ")})`);
   }
 
-  // Supplements
+  // Supplements (taken and skipped)
   if (counts.supplements > 0) {
-    const names = parsed.supplements.map((s) => s.name);
-    parts.push(names.join(", "));
+    const taken = parsed.supplements.filter((s) => !s.skipped).map((s) => s.name);
+    parts.push(taken.join(", "));
+  }
+  if (counts.supplements_skipped > 0) {
+    const skipped = parsed.supplements.filter((s) => s.skipped).map((s) => s.name);
+    parts.push(`skipped: ${skipped.join(", ")}`);
   }
 
   // Symptoms
@@ -152,6 +157,16 @@ function buildSummary(
       return s;
     });
     parts.push(workoutStrs.join(", "));
+  }
+
+  // Bathroom
+  if (counts.bathroom > 0) {
+    const bathroomStrs = parsed.bathroom.map((b) => {
+      let s = `${b.entry_type} ×${b.count}`;
+      if (b.time_of_day) s += ` (${b.time_of_day})`;
+      return s;
+    });
+    parts.push(bathroomStrs.join(", "));
   }
 
   if (parts.length === 0) return "No wellness data detected.";

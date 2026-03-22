@@ -72,8 +72,8 @@ export async function insertDomainEntries(
 ): Promise<{ counts: InsertedCounts; mealItemIds: string[] }> {
   const db = getSupabase();
   const counts: InsertedCounts = {
-    meals: 0, meal_items: 0, sleep: 0, supplements: 0,
-    symptoms: 0, habits: 0, hydration: 0, workouts: 0,
+    meals: 0, meal_items: 0, sleep: 0, supplements: 0, supplements_skipped: 0,
+    symptoms: 0, habits: 0, hydration: 0, workouts: 0, bathroom: 0,
   };
   const mealItemIds: string[] = [];
 
@@ -143,9 +143,15 @@ export async function insertDomainEntries(
       name: s.name,
       dose: s.dose,
       time_approx: s.time_approx,
+      skipped: s.skipped || false,
     }));
     const { error } = await db.from("wellness_supplement_entries").insert(rows);
-    if (!error) counts.supplements = parsed.supplements.length;
+    if (!error) {
+      const taken = parsed.supplements.filter((s) => !s.skipped).length;
+      const skipped = parsed.supplements.filter((s) => s.skipped).length;
+      counts.supplements = taken;
+      counts.supplements_skipped = skipped;
+    }
     else console.error("Failed to insert supplements:", error.message);
   }
 
@@ -204,6 +210,21 @@ export async function insertDomainEntries(
     const { error } = await db.from("wellness_workout_entries").insert(rows);
     if (!error) counts.workouts = parsed.workouts.length;
     else console.error("Failed to insert workouts:", error.message);
+  }
+
+  // --- Bathroom ---
+  if (parsed.bathroom && parsed.bathroom.length > 0) {
+    const rows = parsed.bathroom.map((b) => ({
+      raw_entry_id,
+      entry_date,
+      entry_type: b.entry_type,
+      count: b.count,
+      time_of_day: b.time_of_day,
+      notes: b.notes,
+    }));
+    const { error } = await db.from("wellness_bathroom_entries").insert(rows);
+    if (!error) counts.bathroom = parsed.bathroom.length;
+    else console.error("Failed to insert bathroom:", error.message);
   }
 
   return { counts, mealItemIds };
