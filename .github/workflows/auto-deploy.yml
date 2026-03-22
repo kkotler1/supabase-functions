@@ -31,31 +31,25 @@ jobs:
             echo "No function files changed. Skipping deployment."
             exit 0
           fi
+
+          # Supabase CLI expects supabase/functions/ — create the structure without moving files
+          mkdir -p supabase
+          ln -sf ../functions supabase/functions
+          cp config.toml supabase/config.toml
+
           FUNCTIONS=$(echo "$CHANGED" | cut -d'/' -f2 | sort -u)
-          echo "Functions to deploy:"
-          echo "$FUNCTIONS"
+          echo "Functions to deploy: $FUNCTIONS"
+
           for FUNC in $FUNCTIONS; do
             if [ -d "functions/$FUNC" ]; then
               echo "Deploying $FUNC..."
 
-              # Read verify_jwt from config.toml (default: enabled)
               JWT_FLAG=""
               if grep -A5 "\[functions\.$FUNC\]" config.toml | grep -q "verify_jwt = false"; then
                 JWT_FLAG="--no-verify-jwt"
               fi
 
-              # Use explicit paths since functions live in functions/ not supabase/functions/
-              IMPORT_MAP_FLAG=""
-              if [ -f "functions/$FUNC/deno.json" ]; then
-                IMPORT_MAP_FLAG="--import-map functions/$FUNC/deno.json"
-              fi
-
-              supabase functions deploy "$FUNC" \
-                $JWT_FLAG \
-                $IMPORT_MAP_FLAG \
-                --entrypoint-path "functions/$FUNC/index.ts" \
-                --project-ref "$SUPABASE_PROJECT_REF"
-
+              supabase functions deploy "$FUNC" $JWT_FLAG --project-ref "$SUPABASE_PROJECT_REF"
               echo "Deployed $FUNC successfully."
             else
               echo "Skipping $FUNC - directory not found."
