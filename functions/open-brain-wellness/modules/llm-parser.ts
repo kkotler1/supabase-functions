@@ -8,7 +8,7 @@ import type { ParsedWellnessData } from "../types.ts";
 
 const EXTRACTION_PROMPT = `You are a wellness data extraction engine. Parse the following freeform text into structured JSON. Extract ALL of the following categories if present:
 
-1. meals: array of {meal_type (breakfast/lunch/dinner/snack), time_approx (HH:MM 24h or null), items: [{name, quantity (number), unit (string)}]}
+1. meals: array of {meal_type (breakfast/lunch/dinner/snack), time_approx (HH:MM 24h or null), items: [{name, quantity (number), unit (string), food_type ("generic"|"branded")}]}
 2. sleep: {duration_hours (number or null), quality_rating (1-10 or null), bed_time (HH:MM or null), wake_time (HH:MM or null), interruptions (number or null), notes (string or null)}
 3. symptoms: array of {metric (energy/focus/mood/pain/digestion/anxiety/stress/other), rating (1-10), time_of_day (morning/afternoon/evening/all_day or null), notes (string or null)}
 4. supplements: array of {name, dose (string or null), time_approx (HH:MM or null), skipped (boolean)}
@@ -26,6 +26,7 @@ FOOD RULES (critical):
 - Fractional quantities: "one third" = 0.33, "half" = 0.5, "a handful" = 1 serving, "a spoonful" = 1 tbsp
 - "From the day before" or "leftover" does NOT change the food, just apply the quantity
 - Include brand names: "Nature's Promise Organic No-Stir Crunchy Peanut Butter" — keep full product name
+- food_type: classify each item as "generic" (whole/minimally processed foods with no brand: eggs, banana, chicken breast, rice, red bell pepper, maple syrup, olive oil) or "branded" (specific branded products or items with a clear brand name: "Chobani yogurt", "Birch Benders waffles", "Dunkin' coffee", "Perdue chicken tenders"). When in doubt, prefer "generic" for whole foods.
 - QUANTITY RULES (critical — get this right):
   - quantity means NUMBER OF SERVINGS, not weight in grams
   - "single serving 150g" → quantity: 1, unit: "serving" (the 150g describes serving size, not quantity)
@@ -188,6 +189,7 @@ function normalizeMeal(meal: Record<string, unknown>): ParsedWellnessData["meals
           name: String(item.name || "unknown item"),
           quantity: Number(item.quantity) || 1,
           unit: String(item.unit || "serving"),
+          food_type: item.food_type === "branded" ? "branded" : "generic",
         }))
       : [],
   };
