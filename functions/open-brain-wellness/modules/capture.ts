@@ -47,7 +47,7 @@ export async function captureWellnessEntry(
   }
 
   // 5. Insert into domain tables
-  const { counts, mealItemIds } = await insertDomainEntries(
+  const { counts, mealItemIds, foodTypes } = await insertDomainEntries(
     rawEntry.id,
     rawEntry.entry_date,
     parsed
@@ -58,11 +58,15 @@ export async function captureWellnessEntry(
 
   if (mealItemIds.length > 0) {
     try {
-      food_resolutions = await resolveMealItems(mealItemIds);
+      food_resolutions = await resolveMealItems(mealItemIds, foodTypes);
 
-      const estimated = food_resolutions.filter((r) => r.confidence < 0.5).length;
-      if (estimated > 0) {
-        warnings.push(`${estimated} food(s) resolved with low confidence — consider verifying.`);
+      const lowConfidence = food_resolutions.filter((r) => r.confidence < 0.5).length;
+      if (lowConfidence > 0) {
+        warnings.push(`${lowConfidence} food(s) resolved with low confidence — consider verifying.`);
+      }
+      const needsReview = food_resolutions.filter((r) => r.needs_review).length;
+      if (needsReview > 0) {
+        warnings.push(`${needsReview} branded food(s) flagged for manual review — resolution confidence too low.`);
       }
     } catch (err) {
       console.error("Food resolution failed:", err);

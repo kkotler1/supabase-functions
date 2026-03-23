@@ -69,13 +69,14 @@ export async function insertDomainEntries(
   raw_entry_id: string,
   entry_date: string,
   parsed: ParsedWellnessData
-): Promise<{ counts: InsertedCounts; mealItemIds: string[] }> {
+): Promise<{ counts: InsertedCounts; mealItemIds: string[]; foodTypes: Record<string, "generic" | "branded"> }> {
   const db = getSupabase();
   const counts: InsertedCounts = {
     meals: 0, meal_items: 0, sleep: 0, supplements: 0, supplements_skipped: 0,
     symptoms: 0, habits: 0, hydration: 0, workouts: 0, bathroom: 0,
   };
   const mealItemIds: string[] = [];
+  const foodTypes: Record<string, "generic" | "branded"> = {};
 
   // --- Meals ---
   for (const meal of parsed.meals) {
@@ -116,6 +117,7 @@ export async function insertDomainEntries(
       }
       counts.meal_items++;
       mealItemIds.push(itemData.id);
+      foodTypes[itemData.id] = item.food_type === "branded" ? "branded" : "generic";
     }
   }
 
@@ -227,7 +229,7 @@ export async function insertDomainEntries(
     else console.error("Failed to insert bathroom:", error.message);
   }
 
-  return { counts, mealItemIds };
+  return { counts, mealItemIds, foodTypes };
 }
 
 // --- Query Helpers ---

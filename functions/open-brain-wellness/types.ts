@@ -14,6 +14,7 @@ export interface ParsedFoodItem {
   name: string;
   quantity: number;
   unit: string;
+  food_type?: "generic" | "branded";
 }
 
 export interface ParsedSleep {
@@ -106,6 +107,7 @@ export interface FoodResolutionResult {
   resolution_source: string;
   confidence: number;
   is_new: boolean;
+  needs_review?: boolean;
 }
 
 // --- Capture Pipeline ---

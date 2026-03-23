@@ -8,10 +8,13 @@ import type { FoodCatalogEntry, FoodResolutionResult } from "../types.ts";
 
 // --- Main Resolution Function ---
 
-export async function resolveFood(inputName: string): Promise<FoodResolutionResult> {
+export async function resolveFood(
+  inputName: string,
+  foodType: "generic" | "branded" = "generic"
+): Promise<FoodResolutionResult> {
   const normalized = inputName.trim().toLowerCase();
 
-  // Step 1: Cache check
+  // Step 1: Cache check (honors existing verified entries — never overwritten)
   const cached = await checkCache(normalized);
   if (cached) {
     return {
@@ -20,51 +23,97 @@ export async function resolveFood(inputName: string): Promise<FoodResolutionResu
       resolution_source: "cache",
       confidence: cached.verified ? 1.0 : cached.confidence,
       is_new: false,
+      needs_review: false,
     };
   }
 
-  // Step 2: Open Food Facts
-  const offResult = await searchOpenFoodFacts(inputName);
-  if (offResult) {
-    const entry = await upsertFoodCatalog(offResult, normalized);
+  if (foodType === "generic") {
+    // Generic whole foods → USDA Foundation/SR Legacy (no branded products, no brand assigned)
+    const usdaResult = await searchUSDA(inputName, true);
+    if (usdaResult) {
+      const entry = await upsertFoodCatalog(usdaResult, normalized);
+      return {
+        food: entry,
+        input_name: inputName,
+        resolution_source: "usda",
+        confidence: usdaResult.confidence,
+        is_new: true,
+        needs_review: false,
+      };
+    }
+
+    // Generic fallback: LLM estimate (no branded DB needed)
+    const llmResult = await estimateWithLLM(inputName);
+    const entry = await upsertFoodCatalog(llmResult, normalized);
     return {
       food: entry,
       input_name: inputName,
-      resolution_source: "open_food_facts",
-      confidence: offResult.confidence,
+      resolution_source: "estimated",
+      confidence: llmResult.confidence,
       is_new: true,
+      needs_review: false,
     };
-  }
+  } else {
+    // Branded foods → Open Food Facts first
+    const offResult = await searchOpenFoodFacts(inputName);
+    if (offResult) {
+      if (offResult.confidence >= 0.5) {
+        const entry = await upsertFoodCatalog(offResult, normalized);
+        return {
+          food: entry,
+          input_name: inputName,
+          resolution_source: "open_food_facts",
+          confidence: offResult.confidence,
+          is_new: true,
+          needs_review: false,
+        };
+      }
+      // OFF confidence too low — fall back to LLM estimate and flag for review
+      const llmResult = await estimateWithLLM(inputName);
+      const entry = await upsertFoodCatalog(llmResult, normalized);
+      return {
+        food: entry,
+        input_name: inputName,
+        resolution_source: "estimated",
+        confidence: llmResult.confidence,
+        is_new: true,
+        needs_review: true,
+      };
+    }
 
-  // Step 3: USDA FoodData Central
-  const usdaResult = await searchUSDA(inputName);
-  if (usdaResult) {
-    const entry = await upsertFoodCatalog(usdaResult, normalized);
+    // OFF returned nothing → try USDA Branded as fallback
+    const usdaResult = await searchUSDA(inputName, false);
+    if (usdaResult) {
+      const entry = await upsertFoodCatalog(usdaResult, normalized);
+      return {
+        food: entry,
+        input_name: inputName,
+        resolution_source: "usda",
+        confidence: usdaResult.confidence,
+        is_new: true,
+        needs_review: false,
+      };
+    }
+
+    // Final fallback: LLM estimate, flag for review since branded food not resolved
+    const llmResult = await estimateWithLLM(inputName);
+    const entry = await upsertFoodCatalog(llmResult, normalized);
     return {
       food: entry,
       input_name: inputName,
-      resolution_source: "usda",
-      confidence: usdaResult.confidence,
+      resolution_source: "estimated",
+      confidence: llmResult.confidence,
       is_new: true,
+      needs_review: true,
     };
   }
-
-  // Step 4: LLM Estimation (fallback)
-  const llmResult = await estimateWithLLM(inputName);
-  const entry = await upsertFoodCatalog(llmResult, normalized);
-  return {
-    food: entry,
-    input_name: inputName,
-    resolution_source: "estimated",
-    confidence: llmResult.confidence,
-    is_new: true,
-  };
 }
 
 // --- Batch Resolution (for capture pipeline) ---
 
 export async function resolveMealItems(
-  mealItemIds: string[]
+  mealItemIds: string[],
+  foodTypes?: Record<string, "generic" | "branded">
 ): Promise<FoodResolutionResult[]> {
   const db = getSupabase();
   const results: FoodResolutionResult[] = [];
@@ -80,8 +129,9 @@ export async function resolveMealItems(
 
       if (error || !item) continue;
 
-      // Resolve the food
-      const resolution = await resolveFood(item.input_name);
+      // Resolve the food using the food_type classification from the parse step
+      const foodType = foodTypes?.[itemId] ?? "generic";
+      const resolution = await resolveFood(item.input_name, foodType);
 
       // Calculate multiplier — unit-aware
       // If unit is grams/ml and the food has a serving size in grams,
@@ -107,7 +157,11 @@ export async function resolveMealItems(
 
       const updateData: Record<string, unknown> = {
         food_catalog_id: resolution.food.id,
-        resolution_status: resolution.confidence >= 0.5 ? "resolved" : "estimated",
+        resolution_status: resolution.needs_review
+          ? "needs_review"
+          : resolution.confidence >= 0.5
+          ? "resolved"
+          : "estimated",
         resolution_confidence: resolution.confidence,
       };
 
@@ -269,7 +323,9 @@ async function searchOpenFoodFacts(query: string): Promise<ResolvedFood | null> 
 
 // --- USDA FoodData Central ---
 
-async function searchUSDA(query: string): Promise<ResolvedFood | null> {
+// genericOnly=true uses Foundation/SR Legacy data types (no branded products) and strips brand.
+// genericOnly=false uses Branded data types (fallback for branded foods when OFF fails).
+async function searchUSDA(query: string, genericOnly: boolean = false): Promise<ResolvedFood | null> {
   const apiKey = Deno.env.get("USDA_API_KEY");
   if (!apiKey) {
     console.warn("USDA_API_KEY not set, skipping USDA search");
@@ -281,7 +337,12 @@ async function searchUSDA(query: string): Promise<ResolvedFood | null> {
     url.searchParams.set("query", query);
     url.searchParams.set("api_key", apiKey);
     url.searchParams.set("pageSize", "5");
-    url.searchParams.set("dataType", "Branded,Survey (FNDDS)");
+    // Generic foods: use curated Foundation/SR Legacy databases (no branded products)
+    // Branded fallback: include Branded data type
+    url.searchParams.set(
+      "dataType",
+      genericOnly ? "Foundation,SR Legacy,Survey (FNDDS)" : "Branded,Survey (FNDDS)"
+    );
 
     const resp = await fetch(url.toString());
     if (!resp.ok) return null;
@@ -325,7 +386,8 @@ async function searchUSDA(query: string): Promise<ResolvedFood | null> {
     // USDA nutrient numbers: 208=calories, 203=protein, 205=carbs, 204=fat, 291=fiber, 269=sugar, 307=sodium
     return {
       canonical_name: bestFood.description || query,
-      brand: bestFood.brandName || bestFood.brandOwner || null,
+      // Generic foods should never carry a brand — strip even if USDA provides one
+      brand: genericOnly ? null : (bestFood.brandName || bestFood.brandOwner || null),
       calories: nutrients["208"] ?? nutrients["1008"] ?? null,
       protein_g: nutrients["203"] ?? nutrients["1003"] ?? null,
       carbs_g: nutrients["205"] ?? nutrients["1005"] ?? null,
