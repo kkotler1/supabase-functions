@@ -143,7 +143,7 @@ app.all("*", async (c) => {
       return c.json({ ok: true });
     }
 
-    const wellnessChannel = Deno.env.get("SLACK_WELLNESS_CHANNEL");
+    const wellnessChannel = Deno.env.get("OW_SLACK_WELLNESS_CHANNEL");
     if (wellnessChannel && event.channel !== wellnessChannel) {
       return c.json({ ok: true });
     }

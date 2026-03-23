@@ -3,8 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
-const SLACK_BOT_TOKEN = Deno.env.get("SLACK_BOT_TOKEN")!;
-const SLACK_CAPTURE_CHANNEL = Deno.env.get("SLACK_CAPTURE_CHANNEL")!;
+const SLACK_BOT_TOKEN = Deno.env.get("OB_SLACK_BOT_TOKEN")!;
+const SLACK_CAPTURE_CHANNEL = Deno.env.get("OB_SLACK_CAPTURE_CHANNEL")!;
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -83,6 +83,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       });
     }
     const event = body.event;
+    console.log("EVENT_DIAG:", JSON.stringify({ type: event?.type, channel: event?.channel, expected: SLACK_CAPTURE_CHANNEL, match: event?.channel === SLACK_CAPTURE_CHANNEL }));
     if (!event || event.type !== "message" || event.subtype || event.bot_id
         || event.channel !== SLACK_CAPTURE_CHANNEL) {
       return new Response("ok", { status: 200 });

@@ -13,9 +13,9 @@ export async function verifySlackSignature(
   timestamp: string,
   signature: string
 ): Promise<boolean> {
-  const signingSecret = Deno.env.get("SLACK_SIGNING_SECRET");
+  const signingSecret = Deno.env.get("OW_SLACK_SIGNING_SECRET");
   if (!signingSecret) {
-    console.error("SLACK_SIGNING_SECRET not set");
+    console.error("OW_SLACK_SIGNING_SECRET not set");
     return false;
   }
 
@@ -102,9 +102,9 @@ async function postSlackMessage(
   text: string,
   threadTs?: string
 ): Promise<void> {
-  const token = Deno.env.get("SLACK_BOT_TOKEN");
+  const token = Deno.env.get("OW_SLACK_BOT_TOKEN");
   if (!token) {
-    console.error("SLACK_BOT_TOKEN not set");
+    console.error("OW_SLACK_BOT_TOKEN not set");
     return;
   }
 
