@@ -71,7 +71,7 @@ Only extract what's explicitly there.`,
 
 const server = new McpServer({
   name: "open-brain",
-  version: "1.0.0",
+  version: "1.1.0",
 });
 
 // Tool 1: Semantic Search
@@ -113,6 +113,7 @@ server.registerTool(
       const results = data.map(
         (
           t: {
+            id: string;
             content: string;
             metadata: Record<string, unknown>;
             similarity: number;
@@ -123,6 +124,7 @@ server.registerTool(
           const m = t.metadata || {};
           const parts = [
             `--- Result ${i + 1} (${(t.similarity * 100).toFixed(1)}% match) ---`,
+            `ID: ${t.id}`,
             `Captured: ${new Date(t.created_at).toLocaleDateString()}`,
             `Type: ${m.type || "unknown"}`,
           ];
@@ -167,18 +169,18 @@ server.registerTool(
       topic: z.string().optional().describe("Filter by topic tag"),
       person: z.string().optional().describe("Filter by person mentioned"),
       days: z.number().optional().describe("Only thoughts from the last N days"),
+      include_completed: z.boolean().optional().default(false).describe("Include completed thoughts"),
     },
   },
-  async ({ limit, type, topic, person, days }) => {
+  async ({ limit, type, topic, person, days, include_completed }) => {
     try {
       let q = supabase
         .from("thoughts")
-        .select("id, content, metadata, created_at")
-        .is("completed_at", null)
-        .is("deleted_at", null)
+        .select("id, content, metadata, created_at, completed_at")
         .order("created_at", { ascending: false })
         .limit(limit);
 
+      if (!include_completed) q = q.is("completed_at", null);
       if (type) q = q.contains("metadata", { type });
       if (topic) q = q.contains("metadata", { topics: [topic] });
       if (person) q = q.contains("metadata", { people: [person] });
@@ -203,12 +205,13 @@ server.registerTool(
 
       const results = data.map(
         (
-          t: { id: string; content: string; metadata: Record<string, unknown>; created_at: string },
+          t: { id: string; content: string; metadata: Record<string, unknown>; created_at: string; completed_at: string | null },
           i: number
         ) => {
           const m = t.metadata || {};
           const tags = Array.isArray(m.topics) ? (m.topics as string[]).join(", ") : "";
-          return `${i + 1}. [${t.id}] [${new Date(t.created_at).toLocaleDateString()}] (${m.type || "??"}${tags ? " - " + tags : ""})\n   ${t.content}`;
+          const status = t.completed_at ? " ✓" : "";
+          return `${i + 1}. [${new Date(t.created_at).toLocaleDateString()}]${status} (${m.type || "??"}${tags ? " - " + tags : ""})\n   ID: ${t.id}\n   ${t.content}`;
         }
       );
 
@@ -358,9 +361,9 @@ server.registerTool(
   {
     title: "Complete Thought",
     description:
-      "Mark a thought as completed by its ID. Used during task reviews to close out finished items. The thought is soft-deleted (completed_at timestamp set) and hidden from default list views.",
+      "Mark a thought as completed by its ID. Use this when the user has finished a task or no longer needs to track a thought. The thought remains in the database but is hidden from default list views.",
     inputSchema: {
-      id: z.string().describe("UUID of the thought to mark as completed"),
+      id: z.string().describe("The UUID of the thought to mark as completed"),
     },
   },
   async ({ id }) => {
@@ -369,26 +372,18 @@ server.registerTool(
         .from("thoughts")
         .update({ completed_at: new Date().toISOString() })
         .eq("id", id)
-        .select("id, content")
+        .select("content")
         .single();
 
       if (error) {
         return {
-          content: [{ type: "text" as const, text: `Failed to complete thought: ${error.message}` }],
+          content: [{ type: "text" as const, text: `Failed to complete: ${error.message}` }],
           isError: true,
         };
       }
 
-      if (!data) {
-        return {
-          content: [{ type: "text" as const, text: `Thought '${id}' not found.` }],
-          isError: true,
-        };
-      }
-
-      const preview = data.content.length > 80 ? data.content.substring(0, 80) + "..." : data.content;
       return {
-        content: [{ type: "text" as const, text: `Completed: ${preview}` }],
+        content: [{ type: "text" as const, text: `✓ Completed: ${data.content}` }],
       };
     } catch (err: unknown) {
       return {
@@ -405,37 +400,40 @@ server.registerTool(
   {
     title: "Delete Thought",
     description:
-      "Permanently delete a thought by its ID. Use for removing duplicates or content that should not be in the brain. This is a hard delete — the thought cannot be recovered.",
+      "Permanently delete a thought by its ID. Use this to remove duplicates or thoughts that are no longer relevant. This cannot be undone.",
     inputSchema: {
-      id: z.string().describe("UUID of the thought to permanently delete"),
+      id: z.string().describe("The UUID of the thought to permanently delete"),
     },
   },
   async ({ id }) => {
     try {
-      const { data, error } = await supabase
+      const { data, error: fetchError } = await supabase
         .from("thoughts")
-        .delete()
+        .select("content")
         .eq("id", id)
-        .select("id, content")
         .single();
 
-      if (error) {
+      if (fetchError) {
         return {
-          content: [{ type: "text" as const, text: `Failed to delete thought: ${error.message}` }],
+          content: [{ type: "text" as const, text: `Thought not found: ${fetchError.message}` }],
           isError: true,
         };
       }
 
-      if (!data) {
+      const { error: deleteError } = await supabase
+        .from("thoughts")
+        .delete()
+        .eq("id", id);
+
+      if (deleteError) {
         return {
-          content: [{ type: "text" as const, text: `Thought '${id}' not found.` }],
+          content: [{ type: "text" as const, text: `Failed to delete: ${deleteError.message}` }],
           isError: true,
         };
       }
 
-      const preview = data.content.length > 80 ? data.content.substring(0, 80) + "..." : data.content;
       return {
-        content: [{ type: "text" as const, text: `Deleted: ${preview}` }],
+        content: [{ type: "text" as const, text: `Deleted: ${data.content}` }],
       };
     } catch (err: unknown) {
       return {
@@ -451,7 +449,6 @@ server.registerTool(
 const app = new Hono();
 
 app.all("*", async (c) => {
-  // Accept access key via header OR URL query parameter
   const provided = c.req.header("x-brain-key") || new URL(c.req.url).searchParams.get("key");
   if (!provided || provided !== MCP_ACCESS_KEY) {
     return c.json({ error: "Invalid or missing access key" }, 401);
