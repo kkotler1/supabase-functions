@@ -26,3 +26,9 @@ entrypoint = "./functions/open-brain-mcp/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/open-brain-mcp/*.html" ]
+
+[functions.code-forge-mcp]
+enabled = true
+verify_jwt = false
+import_map = "./functions/code-forge-mcp/deno.json"
+entrypoint = "./functions/code-forge-mcp/index.ts"

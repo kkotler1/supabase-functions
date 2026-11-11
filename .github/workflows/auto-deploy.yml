@@ -19,7 +19,7 @@ jobs:
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 3.1.0   # pinned; flags below checked against 3.1.0 `functions deploy --help`
 
       - name: Detect changed functions and deploy
         env:
@@ -49,7 +49,7 @@ jobs:
                 JWT_FLAG="--no-verify-jwt"
               fi
 
-              supabase functions deploy "$FUNC" $JWT_FLAG --project-ref "$SUPABASE_PROJECT_REF"
+              supabase functions deploy "$FUNC" $JWT_FLAG --remote="$SUPABASE_PROJECT_REF" --yes
               echo "Deployed $FUNC successfully."
             else
               echo "Skipping $FUNC - directory not found."
